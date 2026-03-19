@@ -103,37 +103,26 @@
         </el-button>
       </div>
 
-      <div v-if="sam2Rasters.length === 0" class="empty-tip">暂无栅格分析结果</div>
-      <div v-else class="raster-list">
-        <div
-          v-for="raster in sam2Rasters"
-          :key="raster.raster_id"
-          class="raster-item"
-        >
-          <div class="raster-info">
-            <span class="raster-filename" :title="raster.filename">{{ raster.filename }}</span>
-            <span class="raster-meta">{{ formatDate(raster.created_at) }}</span>
-          </div>
-          <div class="raster-actions">
-            <el-select
-              v-model="rasterColormaps[raster.raster_id]"
-              size="small"
-              style="width:76px"
-              placeholder="Hot"
-            >
-              <el-option value="hot" label="Hot" />
-              <el-option value="plasma" label="Plasma" />
-              <el-option value="inferno" label="Inferno" />
-              <el-option value="viridis" label="Viridis" />
-            </el-select>
-            <el-button
-              size="small"
-              :type="activeRasterId === raster.raster_id ? 'danger' : 'success'"
-              @click="toggleRasterHeatmap(raster)"
-            >
-              {{ activeRasterId === raster.raster_id ? '取消渲染' : '渲染热力图' }}
-            </el-button>
-          </div>
+      <div v-if="tifRasters.length === 0 && !loadingRasters" class="empty-tip">暂无TIF数据</div>
+      <div v-for="raster in tifRasters" :key="raster.id" class="tif-raster-item">
+        <div class="tif-raster-info">
+          <span class="tif-raster-name" :title="raster.filename">{{ raster.filename }}</span>
+          <el-tag :type="statusType(raster.status)" size="small">{{ statusLabel(raster.status) }}</el-tag>
+        </div>
+        <div class="tif-raster-meta" v-if="raster.crs || raster.band_count">
+          <span v-if="raster.crs">{{ raster.crs }}</span>
+          <span v-if="raster.band_count">{{ raster.band_count }}波段</span>
+        </div>
+        <div class="tif-raster-controls">
+          <el-select
+            v-model="rasterColormaps[raster.id]"
+            size="small"
+            style="width:110px"
+            placeholder="色带"
+          >
+            <el-option v-for="c in colormaps" :key="c.value" :label="c.label" :value="c.value" />
+          </el-select>
+          <el-button size="small" type="success" @click="loadToMap(raster)">渲染到地图</el-button>
         </div>
       </div>
     </div>
@@ -162,11 +151,13 @@
 import { ref, onMounted } from 'vue'
 import { Cpu, Upload, Document, Refresh, ZoomIn, PictureFilled, Grid } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import type { SatelliteImage, SAM2Raster } from '../types'
+import type { SatelliteImage, RasterAsset } from '../types'
 import { sam2Api } from '../api/sam2Api'
+import { rasterApi } from '../api/rasterApi'
 
 const props = defineProps<{
   mapViewRef: {
+    addRasterLayer: (url: string, name: string) => void
     showSAM2Heatmap: (
       grid: Array<{ lon: number; lat: number; intensity: number }>,
       colormap: string,
@@ -185,14 +176,24 @@ const loadingImages = ref(false)
 const tifInput = ref<HTMLInputElement | null>(null)
 const selectedTifFile = ref<File | null>(null)
 const analyzingTif = ref(false)
-const sam2Rasters = ref<SAM2Raster[]>([])
+const tifRasters = ref<RasterAsset[]>([])
 const loadingRasters = ref(false)
 const rasterColormaps = ref<Record<string, string>>({})
-const activeRasterId = ref<string | null>(null)
 
 // ── Image preview ──
 const previewVisible = ref(false)
 const previewImage = ref<SatelliteImage | null>(null)
+
+const colormaps = [
+  { value: 'viridis', label: 'Viridis' },
+  { value: 'terrain', label: 'Terrain' },
+  { value: 'rainbow', label: 'Rainbow' },
+  { value: 'plasma', label: 'Plasma' },
+  { value: 'inferno', label: 'Inferno' },
+  { value: 'hot', label: 'Hot' },
+  { value: 'jet', label: 'Jet' },
+  { value: 'RdYlGn', label: 'RdYlGn' },
+]
 
 function onImgChange(event: Event) {
   const input = event.target as HTMLInputElement
@@ -234,14 +235,11 @@ async function runTifAnalysis() {
   if (!selectedTifFile.value) return
   analyzingTif.value = true
   try {
-    const result = await sam2Api.analyzeTif(selectedTifFile.value)
+    await sam2Api.analyzeTif(selectedTifFile.value)
     ElMessage.success('TIF热力图分析完成')
-    rasterColormaps.value[result.raster_id] = 'hot'
-    sam2Rasters.value.unshift(result)
     selectedTifFile.value = null
     if (tifInput.value) tifInput.value.value = ''
-    // Auto-render the new result
-    toggleRasterHeatmap(result)
+    await loadSAM2Rasters()
   } catch {
     ElMessage.error('TIF分析失败，请重试')
   } finally {
@@ -263,10 +261,10 @@ async function loadSatelliteImages() {
 async function loadSAM2Rasters() {
   loadingRasters.value = true
   try {
-    sam2Rasters.value = await sam2Api.listSAM2Rasters()
-    for (const r of sam2Rasters.value) {
-      if (!rasterColormaps.value[r.raster_id]) {
-        rasterColormaps.value[r.raster_id] = 'hot'
+    tifRasters.value = await rasterApi.list()
+    for (const r of tifRasters.value) {
+      if (!rasterColormaps.value[r.id]) {
+        rasterColormaps.value[r.id] = 'hot'
       }
     }
   } catch {
@@ -276,19 +274,23 @@ async function loadSAM2Rasters() {
   }
 }
 
-function toggleRasterHeatmap(raster: SAM2Raster) {
+function loadToMap(raster: RasterAsset) {
   if (!props.mapViewRef) return
-  if (activeRasterId.value === raster.raster_id) {
-    // Cancel render - clear heatmap
-    props.mapViewRef.showSAM2Heatmap([], 'hot')
-    activeRasterId.value = null
-    ElMessage.info('已取消热力图渲染')
-  } else {
-    const colormap = rasterColormaps.value[raster.raster_id] || 'hot'
-    props.mapViewRef.showSAM2Heatmap(raster.heatmap_grid, colormap)
-    activeRasterId.value = raster.raster_id
-    ElMessage.success(`"${raster.filename}" 热力图已渲染到地图`)
-  }
+  const filePath = raster.cog_path || raster.original_path
+  if (!filePath) return
+  const colormap = rasterColormaps.value[raster.id] || 'viridis'
+  const titilerBase = import.meta.env.VITE_TITILER_URL || 'http://localhost:8080'
+  const titilerPath = filePath.replace(/^\/app\/data\//, '/data/')
+  const url = `${titilerBase}/cog/tiles/{z}/{x}/{y}.png?url=${titilerPath}&colormap_name=${colormap}`
+  props.mapViewRef.addRasterLayer(url, raster.filename)
+}
+
+function statusType(status: string) {
+  return { ready: 'success', processing: 'warning', pending: 'info', failed: 'danger' }[status] || 'info'
+}
+
+function statusLabel(status: string) {
+  return { ready: '就绪', processing: '处理中', pending: '待处理', failed: '失败' }[status] || status
 }
 
 function viewImage(img: SatelliteImage) {
@@ -492,46 +494,45 @@ onMounted(() => {
   color: #666;
 }
 
-/* ── Raster list ── */
-.raster-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 280px;
-  overflow-y: auto;
-}
-
-.raster-item {
-  background: #13213a;
+/* ── TIF raster list ── */
+.tif-raster-item {
+  background: #1e2d4a;
   border-radius: 6px;
-  padding: 8px 10px;
+  padding: 10px;
+  margin-bottom: 8px;
+  border: 1px solid #2c3e5a;
 }
 
-.raster-info {
+.tif-raster-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 6px;
 }
 
-.raster-filename {
-  display: block;
+.tif-raster-name {
   font-size: 12px;
   font-weight: 500;
-  color: #ccc;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 160px;
+  color: #ccc;
 }
 
-.raster-meta {
-  display: block;
+.tif-raster-meta {
   font-size: 11px;
-  color: #666;
-  margin-top: 2px;
+  color: #888;
+  margin-bottom: 6px;
+  display: flex;
+  gap: 8px;
 }
 
-.raster-actions {
+.tif-raster-controls {
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 /* ── Preview dialog ── */
