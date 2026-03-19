@@ -276,9 +276,10 @@ async function loadSAM2Rasters() {
 
 function loadToMap(raster: RasterAsset) {
   if (!props.mapViewRef) return
+  const filePath = raster.cog_path || raster.original_path
+  if (!filePath) return
   const colormap = rasterColormaps.value[raster.id] || 'viridis'
   const titilerBase = import.meta.env.VITE_TITILER_URL || 'http://localhost:8080'
-  const filePath = raster.cog_path || raster.original_path
   const titilerPath = filePath.replace(/^\/app\/data\//, '/data/')
   const url = `${titilerBase}/cog/tiles/{z}/{x}/{y}.png?url=${titilerPath}&colormap_name=${colormap}`
   props.mapViewRef.addRasterLayer(url, raster.filename)
