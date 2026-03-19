@@ -104,18 +104,14 @@
       </div>
 
       <div v-if="tifRasters.length === 0 && !loadingRasters" class="empty-tip">暂无TIF数据</div>
-      <div v-for="raster in tifRasters" :key="raster.id" class="tif-raster-item">
+      <div v-for="raster in tifRasters" :key="raster.raster_id" class="tif-raster-item">
         <div class="tif-raster-info">
           <span class="tif-raster-name" :title="raster.filename">{{ raster.filename }}</span>
           <el-tag :type="statusType(raster.status)" size="small">{{ statusLabel(raster.status) }}</el-tag>
         </div>
-        <div class="tif-raster-meta" v-if="raster.crs || raster.band_count">
-          <span v-if="raster.crs">{{ raster.crs }}</span>
-          <span v-if="raster.band_count">{{ raster.band_count }}波段</span>
-        </div>
         <div class="tif-raster-controls">
           <el-select
-            v-model="rasterColormaps[raster.id]"
+            v-model="rasterColormaps[raster.raster_id]"
             size="small"
             style="width:110px"
             placeholder="色带"
@@ -151,9 +147,8 @@
 import { ref, onMounted } from 'vue'
 import { Cpu, Upload, Document, Refresh, ZoomIn, PictureFilled, Grid } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import type { SatelliteImage, RasterAsset } from '../types'
+import type { SatelliteImage, SAM2Raster } from '../types'
 import { sam2Api } from '../api/sam2Api'
-import { rasterApi } from '../api/rasterApi'
 
 const props = defineProps<{
   mapViewRef: {
@@ -176,7 +171,7 @@ const loadingImages = ref(false)
 const tifInput = ref<HTMLInputElement | null>(null)
 const selectedTifFile = ref<File | null>(null)
 const analyzingTif = ref(false)
-const tifRasters = ref<RasterAsset[]>([])
+const tifRasters = ref<SAM2Raster[]>([])
 const loadingRasters = ref(false)
 const rasterColormaps = ref<Record<string, string>>({})
 
@@ -261,10 +256,10 @@ async function loadSatelliteImages() {
 async function loadSAM2Rasters() {
   loadingRasters.value = true
   try {
-    tifRasters.value = await rasterApi.list()
+    tifRasters.value = await sam2Api.listSAM2Rasters()
     for (const r of tifRasters.value) {
-      if (!rasterColormaps.value[r.id]) {
-        rasterColormaps.value[r.id] = 'hot'
+      if (!rasterColormaps.value[r.raster_id]) {
+        rasterColormaps.value[r.raster_id] = 'hot'
       }
     }
   } catch {
@@ -274,23 +269,18 @@ async function loadSAM2Rasters() {
   }
 }
 
-function loadToMap(raster: RasterAsset) {
+function loadToMap(raster: SAM2Raster) {
   if (!props.mapViewRef) return
-  const filePath = raster.cog_path || raster.original_path
-  if (!filePath) return
-  const colormap = rasterColormaps.value[raster.id] || 'viridis'
-  const titilerBase = import.meta.env.VITE_TITILER_URL || 'http://localhost:8080'
-  const titilerPath = filePath.replace(/^\/app\/data\//, '/data/')
-  const url = `${titilerBase}/cog/tiles/{z}/{x}/{y}.png?url=${titilerPath}&colormap_name=${colormap}`
-  props.mapViewRef.addRasterLayer(url, raster.filename)
+  const colormap = rasterColormaps.value[raster.raster_id] || 'hot'
+  props.mapViewRef.showSAM2Heatmap(raster.heatmap_grid, colormap)
 }
 
 function statusType(status: string) {
-  return { ready: 'success', processing: 'warning', pending: 'info', failed: 'danger' }[status] || 'info'
+  return { ready: 'success', processing: 'warning', pending: 'info', failed: 'danger', completed: 'success' }[status] || 'info'
 }
 
 function statusLabel(status: string) {
-  return { ready: '就绪', processing: '处理中', pending: '待处理', failed: '失败' }[status] || status
+  return { ready: '就绪', processing: '处理中', pending: '待处理', failed: '失败', completed: '完成' }[status] || status
 }
 
 function viewImage(img: SatelliteImage) {
