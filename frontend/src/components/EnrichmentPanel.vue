@@ -47,49 +47,26 @@
     <div class="section-header">
       <el-icon><List /></el-icon>
       <span>识别结果列表</span>
-      <el-button size="small" text @click="fetchResults" style="margin-left:auto">刷新</el-button>
+      <el-button size="small" text @click="fetchRasters" style="margin-left:auto">刷新</el-button>
     </div>
 
-    <el-empty v-if="results.length === 0 && !loadingResults" description="暂无识别结果" :image-size="50" />
+    <el-empty v-if="rasters.length === 0 && !loadingRasters" description="暂无TIF数据" :image-size="50" />
 
-    <div v-for="item in results" :key="item.id" class="result-item">
-      <div class="result-header">
-        <span class="result-name">{{ item.name }}</span>
-        <el-tag type="success" size="small">{{ item.method_name }}</el-tag>
+    <div v-for="raster in rasters" :key="raster.id" class="raster-item">
+      <div class="raster-info">
+        <span class="raster-name" :title="raster.filename">{{ raster.filename }}</span>
+        <el-tag :type="statusType(raster.status)" size="small">{{ statusLabel(raster.status) }}</el-tag>
+      </div>
+      <div class="raster-meta-row" v-if="raster.crs || raster.band_count">
+        <span v-if="raster.crs">{{ raster.crs }}</span>
+        <span v-if="raster.band_count">{{ raster.band_count }}波段</span>
       </div>
 
-      <div class="result-stats" v-if="item.enrichment_index !== undefined">
-        <div class="stat-block">
-          <span class="stat-val">{{ (item.enrichment_index! * 100).toFixed(1) }}%</span>
-          <span class="stat-lbl">富集指数</span>
-        </div>
-        <div class="stat-block">
-          <span class="stat-val">{{ (item.high_value_ratio! * 100).toFixed(1) }}%</span>
-          <span class="stat-lbl">高值占比</span>
-        </div>
-        <div class="stat-block">
-          <span class="stat-val">{{ item.coverage_area_km2?.toFixed(0) }}</span>
-          <span class="stat-lbl">覆盖km²</span>
-        </div>
-      </div>
-
-      <div class="result-controls">
-        <el-select
-          v-model="selectedColormaps[item.id]"
-          size="small"
-          placeholder="色带"
-          style="width:90px"
-        >
+      <div class="raster-controls">
+        <el-select v-model="selectedColormaps[raster.id]" size="small" placeholder="色带" style="width:110px">
           <el-option v-for="c in colormaps" :key="c.value" :label="c.label" :value="c.value" />
         </el-select>
-        <el-button size="small" type="success" @click="renderToMap(item)">
-          渲染到地图
-        </el-button>
-      </div>
-
-      <div class="result-meta">
-        <span>来源图层: {{ item.raster_ids.length }} 个</span>
-        <span>{{ formatDate(item.created_at) }}</span>
+        <el-button size="small" type="success" @click="loadToMap(raster)">渲染到地图</el-button>
       </div>
     </div>
   </div>
@@ -99,13 +76,13 @@
 import { ref, onMounted, computed } from 'vue'
 import { TrendCharts, List } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import type { RasterAsset, EnrichmentResultItem, EnrichmentGridPoint } from '../types'
+import type { RasterAsset } from '../types'
 import { rasterApi } from '../api/rasterApi'
 import { enrichmentApi } from '../api/enrichmentApi'
 
 const props = defineProps<{
   mapViewRef: {
-    showEnrichmentLayer: (grid: EnrichmentGridPoint[], colormap: string, name: string) => void
+    addRasterLayer: (url: string, name: string) => void
   } | null
 }>()
 
@@ -115,19 +92,19 @@ const form = ref({
 })
 
 const colormaps = [
-  { value: 'hot', label: 'Hot' },
   { value: 'viridis', label: 'Viridis' },
+  { value: 'terrain', label: 'Terrain' },
+  { value: 'rainbow', label: 'Rainbow' },
   { value: 'plasma', label: 'Plasma' },
   { value: 'inferno', label: 'Inferno' },
+  { value: 'hot', label: 'Hot' },
+  { value: 'jet', label: 'Jet' },
   { value: 'RdYlGn', label: 'RdYlGn' },
-  { value: 'rainbow', label: 'Rainbow' },
 ]
 
 const rasters = ref<RasterAsset[]>([])
 const loadingRasters = ref(false)
 const analyzing = ref(false)
-const results = ref<EnrichmentResultItem[]>([])
-const loadingResults = ref(false)
 const selectedColormaps = ref<Record<string, string>>({})
 
 const readyRasters = computed(() => rasters.value.filter((r) => r.status === 'ready'))
@@ -141,27 +118,18 @@ async function fetchRasters() {
   }
 }
 
-async function fetchResults() {
-  loadingResults.value = true
-  try {
-    results.value = await enrichmentApi.list()
-  } finally {
-    loadingResults.value = false
-  }
-}
-
 async function runAnalysis() {
   if (!form.value.name || form.value.selectedRasterIds.length === 0) return
   analyzing.value = true
   try {
-    const result = await enrichmentApi.analyze(
+    await enrichmentApi.analyze(
       form.value.name,
       form.value.selectedRasterIds,
     )
-    results.value.unshift(result)
     form.value.name = ''
     form.value.selectedRasterIds = []
     ElMessage.success('富集指数识别完成')
+    await fetchRasters()
   } catch {
     ElMessage.error('识别分析失败，请重试')
   } finally {
@@ -169,25 +137,25 @@ async function runAnalysis() {
   }
 }
 
-async function renderToMap(item: EnrichmentResultItem) {
+function loadToMap(raster: RasterAsset) {
   if (!props.mapViewRef) return
-  try {
-    const data = await enrichmentApi.getGrid(item.id)
-    const colormap = selectedColormaps.value[item.id] || item.colormap || 'hot'
-    props.mapViewRef.showEnrichmentLayer(data.grid || [], colormap, item.name)
-    ElMessage.success(`"${item.name}" 已渲染到地图`)
-  } catch {
-    ElMessage.error('渲染失败，请重试')
-  }
+  const colormap = selectedColormaps.value[raster.id] || 'viridis'
+  const titilerBase = import.meta.env.VITE_TITILER_URL || 'http://localhost:8080'
+  const filePath = raster.cog_path || raster.original_path
+  const titilerPath = filePath.replace(/^\/app\/data\//, '/data/')
+  const url = `${titilerBase}/cog/tiles/{z}/{x}/{y}.png?url=${titilerPath}&colormap_name=${colormap}`
+  props.mapViewRef.addRasterLayer(url, raster.filename)
 }
 
-function formatDate(dateStr: string) {
-  return new Date(dateStr).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+function statusType(status: string) {
+  return { ready: 'success', processing: 'warning', pending: 'info', failed: 'danger' }[status] || 'info'
 }
 
-onMounted(async () => {
-  await Promise.all([fetchRasters(), fetchResults()])
-})
+function statusLabel(status: string) {
+  return { ready: '就绪', processing: '处理中', pending: '待处理', failed: '失败' }[status] || status
+}
+
+onMounted(fetchRasters)
 </script>
 
 <style scoped>
@@ -212,65 +180,43 @@ onMounted(async () => {
   margin-top: 4px;
 }
 
-.result-item {
+.raster-item {
   background: #1e2d4a;
   border-radius: 6px;
   padding: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   border: 1px solid #2c3e5a;
 }
 
-.result-header {
+.raster-info {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.result-name {
-  font-weight: bold;
-  color: #e0e0e0;
-  font-size: 13px;
-}
-
-.result-stats {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.stat-block {
-  flex: 1;
-  background: #13213a;
-  border-radius: 4px;
-  padding: 6px;
-  text-align: center;
-}
-
-.stat-val {
-  display: block;
-  font-size: 16px;
-  font-weight: bold;
-  color: #fff;
-}
-
-.stat-lbl {
-  display: block;
-  font-size: 10px;
-  color: #90caf9;
-}
-
-.result-controls {
-  display: flex;
-  gap: 8px;
   align-items: center;
   margin-bottom: 6px;
 }
 
-.result-meta {
-  display: flex;
-  justify-content: space-between;
+.raster-name {
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+  color: #ccc;
+}
+
+.raster-meta-row {
   font-size: 11px;
-  color: #666;
+  color: #888;
+  margin-bottom: 6px;
+  display: flex;
+  gap: 8px;
+}
+
+.raster-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 </style>
