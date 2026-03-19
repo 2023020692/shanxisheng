@@ -47,26 +47,26 @@
     <div class="section-header">
       <el-icon><List /></el-icon>
       <span>识别结果列表</span>
-      <el-button size="small" text @click="fetchRasters" style="margin-left:auto">刷新</el-button>
+      <el-button size="small" text @click="fetchEnrichmentResults" style="margin-left:auto">刷新</el-button>
     </div>
 
-    <el-empty v-if="rasters.length === 0 && !loadingRasters" description="暂无TIF数据" :image-size="50" />
+    <el-empty v-if="enrichmentResults.length === 0 && !loadingResults" description="暂无识别结果" :image-size="50" />
 
-    <div v-for="raster in rasters" :key="raster.id" class="raster-item">
+    <div v-for="result in enrichmentResults" :key="result.id" class="raster-item">
       <div class="raster-info">
-        <span class="raster-name" :title="raster.filename">{{ raster.filename }}</span>
-        <el-tag :type="statusType(raster.status)" size="small">{{ statusLabel(raster.status) }}</el-tag>
+        <span class="raster-name" :title="result.name">{{ result.name }}</span>
+        <el-tag :type="statusType(result.status)" size="small">{{ statusLabel(result.status) }}</el-tag>
       </div>
-      <div class="raster-meta-row" v-if="raster.crs || raster.band_count">
-        <span v-if="raster.crs">{{ raster.crs }}</span>
-        <span v-if="raster.band_count">{{ raster.band_count }}波段</span>
+      <div class="raster-meta-row" v-if="result.enrichment_index != null || result.high_value_ratio != null">
+        <span v-if="result.enrichment_index != null">富集指数: {{ result.enrichment_index.toFixed(3) }}</span>
+        <span v-if="result.high_value_ratio != null">高值比: {{ (result.high_value_ratio * 100).toFixed(1) }}%</span>
       </div>
 
       <div class="raster-controls">
-        <el-select v-model="selectedColormaps[raster.id]" size="small" placeholder="色带" style="width:110px">
+        <el-select v-model="selectedColormaps[result.id]" size="small" placeholder="色带" style="width:110px">
           <el-option v-for="c in colormaps" :key="c.value" :label="c.label" :value="c.value" />
         </el-select>
-        <el-button size="small" type="success" @click="loadToMap(raster)">渲染到地图</el-button>
+        <el-button size="small" type="success" @click="loadToMap(result)">渲染到地图</el-button>
       </div>
     </div>
   </div>
@@ -76,13 +76,14 @@
 import { ref, onMounted, computed } from 'vue'
 import { TrendCharts, List } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import type { RasterAsset } from '../types'
+import type { RasterAsset, EnrichmentResultItem, EnrichmentGridPoint } from '../types'
 import { rasterApi } from '../api/rasterApi'
 import { enrichmentApi } from '../api/enrichmentApi'
 
 const props = defineProps<{
   mapViewRef: {
     addRasterLayer: (url: string, name: string) => void
+    showEnrichmentLayer: (grid: EnrichmentGridPoint[], colormap: string, name: string) => void
   } | null
 }>()
 
@@ -102,8 +103,14 @@ const colormaps = [
   { value: 'RdYlGn', label: 'RdYlGn' },
 ]
 
+// Data layer rasters (for the form dropdown selector)
 const rasters = ref<RasterAsset[]>([])
 const loadingRasters = ref(false)
+
+// Enrichment analysis results (for the results list)
+const enrichmentResults = ref<EnrichmentResultItem[]>([])
+const loadingResults = ref(false)
+
 const analyzing = ref(false)
 const selectedColormaps = ref<Record<string, string>>({})
 
@@ -118,6 +125,15 @@ async function fetchRasters() {
   }
 }
 
+async function fetchEnrichmentResults() {
+  loadingResults.value = true
+  try {
+    enrichmentResults.value = await enrichmentApi.list()
+  } finally {
+    loadingResults.value = false
+  }
+}
+
 async function runAnalysis() {
   if (!form.value.name || form.value.selectedRasterIds.length === 0) return
   analyzing.value = true
@@ -129,7 +145,7 @@ async function runAnalysis() {
     form.value.name = ''
     form.value.selectedRasterIds = []
     ElMessage.success('富集指数识别完成')
-    await fetchRasters()
+    await fetchEnrichmentResults()
   } catch {
     ElMessage.error('识别分析失败，请重试')
   } finally {
@@ -137,26 +153,29 @@ async function runAnalysis() {
   }
 }
 
-function loadToMap(raster: RasterAsset) {
+async function loadToMap(result: EnrichmentResultItem) {
   if (!props.mapViewRef) return
-  const filePath = raster.cog_path || raster.original_path
-  if (!filePath) return
-  const colormap = selectedColormaps.value[raster.id] || 'viridis'
-  const titilerBase = import.meta.env.VITE_TITILER_URL || 'http://localhost:8080'
-  const titilerPath = filePath.replace(/^\/app\/data\//, '/data/')
-  const url = `${titilerBase}/cog/tiles/{z}/{x}/{y}.png?url=${titilerPath}&colormap_name=${colormap}`
-  props.mapViewRef.addRasterLayer(url, raster.filename)
+  const colormap = selectedColormaps.value[result.id] || result.colormap || 'hot'
+  try {
+    const data = await enrichmentApi.getGrid(result.id)
+    props.mapViewRef.showEnrichmentLayer(data.grid, colormap, result.name)
+  } catch {
+    ElMessage.error('加载富集指数图层失败')
+  }
 }
 
 function statusType(status: string) {
-  return { ready: 'success', processing: 'warning', pending: 'info', failed: 'danger' }[status] || 'info'
+  return { ready: 'success', processing: 'warning', pending: 'info', failed: 'danger', SUCCESS: 'success', FAILURE: 'danger' }[status] || 'info'
 }
 
 function statusLabel(status: string) {
-  return { ready: '就绪', processing: '处理中', pending: '待处理', failed: '失败' }[status] || status
+  return { ready: '就绪', processing: '处理中', pending: '待处理', failed: '失败', SUCCESS: '完成', FAILURE: '失败' }[status] || status
 }
 
-onMounted(fetchRasters)
+onMounted(() => {
+  fetchRasters()
+  fetchEnrichmentResults()
+})
 </script>
 
 <style scoped>
