@@ -37,7 +37,7 @@
         @click="runAnalysis"
         style="width:100%"
       >
-        开始富集指数识别
+        融合
       </el-button>
     </el-form>
 
@@ -53,15 +53,7 @@
     <el-empty v-if="enrichmentResults.length === 0 && !loadingResults" description="暂无识别结果" :image-size="50" />
 
     <div v-for="result in enrichmentResults" :key="result.id" class="raster-item">
-      <div class="raster-info">
-        <span class="raster-name" :title="result.name">{{ result.name }}</span>
-        <el-tag :type="statusType(result.status)" size="small">{{ statusLabel(result.status) }}</el-tag>
-      </div>
-      <div class="raster-meta-row" v-if="result.enrichment_index != null || result.high_value_ratio != null">
-        <span v-if="result.enrichment_index != null">富集指数: {{ result.enrichment_index.toFixed(3) }}</span>
-        <span v-if="result.high_value_ratio != null">高值比: {{ (result.high_value_ratio * 100).toFixed(1) }}%</span>
-      </div>
-
+      <span class="raster-name" :title="result.name">{{ result.name }}</span>
       <div class="raster-controls">
         <el-select v-model="selectedColormaps[result.id]" size="small" placeholder="色带" style="width:110px">
           <el-option v-for="c in colormaps" :key="c.value" :label="c.label" :value="c.value" />
@@ -141,13 +133,14 @@ async function runAnalysis() {
     await enrichmentApi.analyze(
       form.value.name,
       form.value.selectedRasterIds,
+      'overlay',
     )
     form.value.name = ''
     form.value.selectedRasterIds = []
-    ElMessage.success('富集指数识别完成')
+    ElMessage.success('融合分析完成')
     await fetchEnrichmentResults()
   } catch {
-    ElMessage.error('识别分析失败，请重试')
+    ElMessage.error('融合分析失败，请重试')
   } finally {
     analyzing.value = false
   }
@@ -160,16 +153,8 @@ async function loadToMap(result: EnrichmentResultItem) {
     const data = await enrichmentApi.getGrid(result.id)
     props.mapViewRef.showEnrichmentLayer(data.grid, colormap, result.name)
   } catch {
-    ElMessage.error('加载富集指数图层失败')
+    ElMessage.error('加载融合图层失败')
   }
-}
-
-function statusType(status: string) {
-  return { ready: 'success', processing: 'warning', pending: 'info', failed: 'danger', SUCCESS: 'success', FAILURE: 'danger' }[status] || 'info'
-}
-
-function statusLabel(status: string) {
-  return { ready: '就绪', processing: '处理中', pending: '待处理', failed: '失败', SUCCESS: '完成', FAILURE: '失败' }[status] || status
 }
 
 onMounted(() => {
@@ -206,13 +191,9 @@ onMounted(() => {
   padding: 10px;
   margin-bottom: 8px;
   border: 1px solid #2c3e5a;
-}
-
-.raster-info {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 6px;
+  gap: 8px;
 }
 
 .raster-name {
@@ -221,16 +202,8 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 160px;
+  flex: 1;
   color: #ccc;
-}
-
-.raster-meta-row {
-  font-size: 11px;
-  color: #888;
-  margin-bottom: 6px;
-  display: flex;
-  gap: 8px;
 }
 
 .raster-controls {

@@ -12,6 +12,7 @@ import app.storage as storage
 router = APIRouter(tags=["enrichment"])
 
 ENRICHMENT_METHODS = {
+    "overlay": "叠加分析",
     "weighted_composite": "加权复合指数法",
     "pca": "主成分分析法",
     "spectral_index": "光谱指数法",
