@@ -5,10 +5,12 @@ export const enrichmentApi = {
   async analyze(
     name: string,
     rasterIds: string[],
+    method: string = 'overlay',
   ): Promise<EnrichmentResultItem> {
     const res = await apiClient.post<EnrichmentResultItem>('/api/enrichment/analyze', {
       name,
       raster_ids: rasterIds,
+      method,
     })
     return res.data
   },
